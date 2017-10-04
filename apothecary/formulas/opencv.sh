@@ -8,11 +8,12 @@
 
 FORMULA_TYPES=( "osx" "ios" "tvos" "vs" "android" "emscripten" )
 
-# define the version
-VER=3.1.0
+# define the version ; can be HEAD or a tag, like 3.3.0
+VER=3.3.0
 
 # tools for git use
-GIT_URL=https://github.com/Itseez/opencv.git
+GIT_BASE_URL=https://github.com/opencv
+GIT_URL=$GIT_BASE_URL/opencv.git
 GIT_TAG=$VER
 
 # these paths don't really matter - they are set correctly further down
@@ -22,17 +23,30 @@ local LIB_FOLDER64="$LIB_FOLDER-64"
 local LIB_FOLDER_IOS="$LIB_FOLDER-IOS"
 local LIB_FOLDER_IOS_SIM="$LIB_FOLDER-IOSIM"
 
-
 # download the source code and unpack it into LIB_NAME
 function download() {
     if [ "$TYPE" != "android" ]; then
-        wget https://github.com/Itseez/opencv/archive/$VER.tar.gz -O opencv-$VER.tar.gz
-        tar -xf opencv-$VER.tar.gz
-        mv opencv-$VER $1
-        rm opencv*.tar.gz
+        # get opencv
+        rm -rf opencv-${VER} opencv
+        rm -f ${VER}.zip
+        curl -L -O ${GIT_BASE_URL}/opencv/archive/${VER}.zip
+        unzip -aq ${VER}.zip
+        mv opencv-${VER} opencv
+        # get opencv_contrib
+        rm -rf opencv_contrib-${VER} opencv_contrib
+        rm -f ${VER}.zip
+        curl -L -O ${GIT_BASE_URL}/opencv_contrib/archive/${VER}.zip
+        unzip -aq ${VER}.zip
+        mv opencv_contrib-${VER} opencv_contrib
+        # patch CMakeLists.txt to use C++14
+        cd opencv
+        sed s/XX11/XX14/g CMakeLists.txt > CMakeLists.txt.tmp
+        sed s/\+\+11/\+\+14/g CMakeLists.txt.tmp > CMakeLists.txt.tmp2
+        rm CMakeLists.txt.tmp
+        mv -f CMakeLists.txt.tmp2 CMakeLists.txt
     else
-        wget http://sourceforge.net/projects/opencvlibrary/files/opencv-android/3.1.0/OpenCV-3.1.0-android-sdk.zip/download -O OpenCV-3.1.0-android-sdk.zip
-        unzip -qo OpenCV-3.1.0-android-sdk.zip
+        wget http://sourceforge.net/projects/opencvlibrary/files/opencv-android/${VER}/OpenCV-${VER}-android-sdk.zip/download -O OpenCV-${VER}-android-sdk.zip
+        unzip -qo OpenCV-${VER}-android-sdk.zip
         mv OpenCV-android-sdk $1
     fi
 }
@@ -56,11 +70,10 @@ function build() {
     rm -f CMakeCache.txt
     echo "Log:" >> "${LOG}" 2>&1
     set +e
-    cmake .. -DCMAKE_INSTALL_PREFIX=$LIB_FOLDER \
-      -DCMAKE_OSX_DEPLOYMENT_TARGET=10.7 \
-      -DENABLE_FAST_MATH=OFF \
-      -DCMAKE_CXX_FLAGS="-fvisibility-inlines-hidden -stdlib=libc++ -O3 -fPIC -arch i386 -arch x86_64 -mmacosx-version-min=${OSX_MIN_SDK_VER}" \
-      -DCMAKE_C_FLAGS="-fvisibility-inlines-hidden -stdlib=libc++ -O3 -fPIC -arch i386 -arch x86_64 -mmacosx-version-min=${OSX_MIN_SDK_VER}" \
+      cmake .. -DCMAKE_INSTALL_PREFIX=$LIB_FOLDER \
+      -DCMAKE_OSX_DEPLOYMENT_TARGET=10.9 \
+      -DCMAKE_CXX_FLAGS="-fvisibility-inlines-hidden -stdlib=libc++ -std=c++14 -O3 -fPIC" \
+      -DCMAKE_C_FLAGS="-fvisibility-inlines-hidden -stdlib=libc++ -O3 -fPIC" \
       -DCMAKE_BUILD_TYPE="Release" \
       -DBUILD_SHARED_LIBS=OFF \
       -DBUILD_DOCS=OFF \
@@ -81,6 +94,7 @@ function build() {
       -DWITH_OPENCL=OFF \
       -DWITH_OPENCLAMDBLAS=OFF \
       -DWITH_OPENCLAMDFFT=OFF \
+      -DWITH_VA_INTEL=OFF \
       -DWITH_GIGEAPI=OFF \
       -DWITH_CUDA=OFF \
       -DWITH_CUFFT=OFF \
@@ -91,12 +105,18 @@ function build() {
       -DWITH_OPENNI=OFF \
       -DWITH_QT=OFF \
       -DWITH_QUICKTIME=OFF \
+      -DWITH_WEBP=OFF \
       -DWITH_V4L=OFF \
       -DWITH_PVAPI=OFF \
       -DWITH_OPENEXR=OFF \
       -DWITH_EIGEN=OFF \
       -DBUILD_TESTS=OFF \
-      -DBUILD_PERF_TESTS=OFF 2>&1 | tee -a ${LOG}
+      -DBUILD_PERF_TESTS=OFF \
+      -DOPENCV_EXTRA_MODULES_PATH=../../opencv_contrib/modules \
+      -DTINYDNN_USE_SSE=ON \
+      -DTINYDNN_USE_AVX=ON \
+      2>&1 | tee -a ${LOG}
+
     echo "CMAKE Successful"
     echo "--------------------"
     echo "Running make clean"
@@ -116,100 +136,107 @@ function build() {
 
     echo "--------------------"
     echo "Joining all libs in one"
-    outputlist="lib/lib*.a"
+    outputlist="lib/lib*.a 3rdparty/lib/libittnotify.a 3rdparty/lib/liblibprotobuf.a"
+    # outputlist=$(find lib 3rdparty -name "*.a")
     libtool -static $outputlist -o "$LIB_FOLDER/lib/opencv.a" 2>&1 | tee -a ${LOG}
     echo "Joining all libs in one Successful"
+
+    echo "--------------------"
+    echo "Fixing permissions"
+    find "$LIB_FOLDER" -type f -perm 755 -exec chmod 644 "{}" \; 2>&1 | tee -a ${LOG}
+    echo "Fixing permissions Successful"
+
 
   elif [ "$TYPE" == "vs" ] ; then
     unset TMP
     unset TEMP
 
     rm -f CMakeCache.txt
-	#LIB_FOLDER="$BUILD_DIR/opencv/build/$TYPE"
-	mkdir -p $LIB_FOLDER
+    #LIB_FOLDER="$BUILD_DIR/opencv/build/$TYPE"
+    mkdir -p $LIB_FOLDER
     LOG="$LIB_FOLDER/opencv2-${VER}.log"
     echo "Logging to $LOG"
     echo "Log:" >> "${LOG}" 2>&1
     set +e
-	if [ $ARCH == 32 ] ; then
-		mkdir -p build_vs_32
-		cd build_vs_32
-		cmake .. -G "Visual Studio $VS_VER"\
-		-DBUILD_PNG=OFF \
-		-DWITH_OPENCLAMDBLAS=OFF \
-		-DBUILD_TESTS=OFF \
-		-DWITH_CUDA=OFF \
-		-DWITH_FFMPEG=OFF \
-		-DWITH_WIN32UI=OFF \
-		-DBUILD_PACKAGE=OFF \
-		-DWITH_JASPER=OFF \
-		-DWITH_OPENEXR=OFF \
-		-DWITH_GIGEAPI=OFF \
-		-DWITH_JPEG=OFF \
-		-DBUILD_WITH_DEBUG_INFO=OFF \
-		-DWITH_CUFFT=OFF \
-		-DBUILD_TIFF=OFF \
-		-DBUILD_JPEG=OFF \
-		-DWITH_OPENCLAMDFFT=OFF \
-		-DBUILD_WITH_STATIC_CRT=OFF \
-		-DBUILD_opencv_java=OFF \
-		-DBUILD_opencv_python=OFF \
-		-DBUILD_opencv_apps=OFF \
-		-DBUILD_PERF_TESTS=OFF \
-		-DBUILD_JASPER=OFF \
-		-DBUILD_DOCS=OFF \
-		-DWITH_TIFF=OFF \
-		-DWITH_1394=OFF \
-		-DWITH_EIGEN=OFF \
-		-DBUILD_OPENEXR=OFF \
-		-DWITH_DSHOW=OFF \
-		-DWITH_VFW=OFF \
-		-DBUILD_SHARED_LIBS=OFF \
-		-DWITH_PNG=OFF \
-		-DWITH_OPENCL=OFF \
-		-DWITH_PVAPI=OFF  | tee ${LOG}
-		vs-build "OpenCV.sln" Build "Release|Win32"
-		vs-build "OpenCV.sln" Build "Debug|Win32"
-	elif [ $ARCH == 64 ] ; then
-		mkdir -p build_vs_64
-		cd build_vs_64
-		cmake .. -G "Visual Studio $VS_VER Win64" \
-		-DBUILD_PNG=OFF \
-		-DWITH_OPENCLAMDBLAS=OFF \
-		-DBUILD_TESTS=OFF \
-		-DWITH_CUDA=OFF \
-		-DWITH_FFMPEG=OFF \
-		-DWITH_WIN32UI=OFF \
-		-DBUILD_PACKAGE=OFF \
-		-DWITH_JASPER=OFF \
-		-DWITH_OPENEXR=OFF \
-		-DWITH_GIGEAPI=OFF \
-		-DWITH_JPEG=OFF \
-		-DBUILD_WITH_DEBUG_INFO=OFF \
-		-DWITH_CUFFT=OFF \
-		-DBUILD_TIFF=OFF \
-		-DBUILD_JPEG=OFF \
-		-DWITH_OPENCLAMDFFT=OFF \
-		-DBUILD_WITH_STATIC_CRT=OFF \
-		-DBUILD_opencv_java=OFF \
-		-DBUILD_opencv_python=OFF \
-		-DBUILD_opencv_apps=OFF \
-		-DBUILD_PERF_TESTS=OFF \
-		-DBUILD_JASPER=OFF \
-		-DBUILD_DOCS=OFF \
-		-DWITH_TIFF=OFF \
-		-DWITH_1394=OFF \
-		-DWITH_EIGEN=OFF \
-		-DBUILD_OPENEXR=OFF \
-		-DWITH_DSHOW=OFF \
-		-DWITH_VFW=OFF \
-		-DBUILD_SHARED_LIBS=OFF \
-		-DWITH_PNG=OFF \
-		-DWITH_OPENCL=OFF \
-		-DWITH_PVAPI=OFF  | tee ${LOG}
-		vs-build "OpenCV.sln" Build "Release|x64"
-		vs-build "OpenCV.sln" Build "Debug|x64"
-	fi
+    if [ $ARCH == 32 ] ; then
+        mkdir -p build_vs_32
+        cd build_vs_32
+        cmake .. -G "Visual Studio $VS_VER"\
+        -DBUILD_PNG=OFF \
+        -DWITH_OPENCLAMDBLAS=OFF \
+        -DBUILD_TESTS=OFF \
+        -DWITH_CUDA=OFF \
+        -DWITH_FFMPEG=OFF \
+        -DWITH_WIN32UI=OFF \
+        -DBUILD_PACKAGE=OFF \
+        -DWITH_JASPER=OFF \
+        -DWITH_OPENEXR=OFF \
+        -DWITH_GIGEAPI=OFF \
+        -DWITH_JPEG=OFF \
+        -DBUILD_WITH_DEBUG_INFO=OFF \
+        -DWITH_CUFFT=OFF \
+        -DBUILD_TIFF=OFF \
+        -DBUILD_JPEG=OFF \
+        -DWITH_OPENCLAMDFFT=OFF \
+        -DBUILD_WITH_STATIC_CRT=OFF \
+        -DBUILD_opencv_java=OFF \
+        -DBUILD_opencv_python=OFF \
+        -DBUILD_opencv_apps=OFF \
+        -DBUILD_PERF_TESTS=OFF \
+        -DBUILD_JASPER=OFF \
+        -DBUILD_DOCS=OFF \
+        -DWITH_TIFF=OFF \
+        -DWITH_1394=OFF \
+        -DWITH_EIGEN=OFF \
+        -DBUILD_OPENEXR=OFF \
+        -DWITH_DSHOW=OFF \
+        -DWITH_VFW=OFF \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DWITH_PNG=OFF \
+        -DWITH_OPENCL=OFF \
+        -DWITH_PVAPI=OFF  | tee ${LOG}
+        vs-build "OpenCV.sln"
+        vs-build "OpenCV.sln" Build "Debug"
+    elif [ $ARCH == 64 ] ; then
+        mkdir -p build_vs_64
+        cd build_vs_64
+        cmake .. -G "Visual Studio $VS_VER Win64" \
+        -DBUILD_PNG=OFF \
+        -DWITH_OPENCLAMDBLAS=OFF \
+        -DBUILD_TESTS=OFF \
+        -DWITH_CUDA=OFF \
+        -DWITH_FFMPEG=OFF \
+        -DWITH_WIN32UI=OFF \
+        -DBUILD_PACKAGE=OFF \
+        -DWITH_JASPER=OFF \
+        -DWITH_OPENEXR=OFF \
+        -DWITH_GIGEAPI=OFF \
+        -DWITH_JPEG=OFF \
+        -DBUILD_WITH_DEBUG_INFO=OFF \
+        -DWITH_CUFFT=OFF \
+        -DBUILD_TIFF=OFF \
+        -DBUILD_JPEG=OFF \
+        -DWITH_OPENCLAMDFFT=OFF \
+        -DBUILD_WITH_STATIC_CRT=OFF \
+        -DBUILD_opencv_java=OFF \
+        -DBUILD_opencv_python=OFF \
+        -DBUILD_opencv_apps=OFF \
+        -DBUILD_PERF_TESTS=OFF \
+        -DBUILD_JASPER=OFF \
+        -DBUILD_DOCS=OFF \
+        -DWITH_TIFF=OFF \
+        -DWITH_1394=OFF \
+        -DWITH_EIGEN=OFF \
+        -DBUILD_OPENEXR=OFF \
+        -DWITH_DSHOW=OFF \
+        -DWITH_VFW=OFF \
+        -DBUILD_SHARED_LIBS=OFF \
+        -DWITH_PNG=OFF \
+        -DWITH_OPENCL=OFF \
+        -DWITH_PVAPI=OFF  | tee ${LOG}
+        vs-build "OpenCV.sln" Build "Release|x64"
+        vs-build "OpenCV.sln" Build "Debug|x64"
+    fi
 
   elif [[ "$TYPE" == "ios" || "${TYPE}" == "tvos" ]] ; then
     local IOS_ARCHS
@@ -282,7 +309,10 @@ function build() {
       -DWITH_OPENEXR=OFF \
       -DBUILD_OPENEXR=OFF \
       -DBUILD_TESTS=OFF \
-      -DBUILD_PERF_TESTS=OFF
+      -DBUILD_PERF_TESTS=OFF \
+      -DTINYDNN_USE_SSE=ON \
+      -DTINYDNN_USE_AVX=ON \
+
 
 
         echo "--------------------"
@@ -425,17 +455,27 @@ function copy() {
 
     LIB_FOLDER="$BUILD_DIR/opencv/build/$TYPE/"
 
+    # copy include folder from opencv
     cp -R $LIB_FOLDER/include/ $1/include/
+
+    # aggregate include/opencv2 folders from opencv_contrib modules
+    this_dir=$(pwd)
+    modules_dir="$BUILD_DIR/opencv_contrib/modules"
+    for d in $(find . -type d -name "opencv2" -maxdepth 1); do
+        cd "$modules_dir"
+        cd "$d" && tar cf - . | (cd $1/include/opencv2; tar xf -)
+    done
+    cd "$this_dir"
 
     # copy lib
     cp -R $LIB_FOLDER/lib/opencv.a $1/lib/$TYPE/
 
   elif [ "$TYPE" == "vs" ] ; then
-		if [ $ARCH == 32 ] ; then
+        if [ $ARCH == 32 ] ; then
       DEPLOY_PATH="$1/lib/$TYPE/Win32"
-		elif [ $ARCH == 64 ] ; then
-			DEPLOY_PATH="$1/lib/$TYPE/x64"
-		fi
+        elif [ $ARCH == 64 ] ; then
+            DEPLOY_PATH="$1/lib/$TYPE/x64"
+        fi
       mkdir -p "$DEPLOY_PATH/Release"
       mkdir -p "$DEPLOY_PATH/Debug"
       # now make sure the target directories are clean.
